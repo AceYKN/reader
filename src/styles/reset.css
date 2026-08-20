@@ -1,0 +1,1 @@
+*,*::before,*::after{box-sizing:border-box}html{font-synthesis:none;text-rendering:optimizeLegibility}body{margin:0;min-width:320px;min-height:100vh}button,input,textarea,select{font:inherit}button{color:inherit}img{max-width:100%;display:block}a{color:inherit}svg{flex:0 0 auto}::selection{background:var(--selection)}
