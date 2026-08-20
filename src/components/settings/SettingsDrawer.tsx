@@ -27,7 +27,7 @@ export function SettingsDrawer({ open, onClose, preferences, onPreferences, ai, 
         <button className={preferences.theme === 'system' ? 'active' : ''} onClick={() => onPreferences({ ...preferences, theme: 'system' })}>自动</button>
       </div></section>
       <section><h3><KeyRound />AI · 自备 Key</h3><p className="section-help">Key 只保留在当前标签页的 sessionStorage，通过无状态边缘代理发送给你选择的服务商。</p>
-        <label className="field"><span>Provider</span><select value={ai.provider} onChange={(event) => { const provider = event.target.value as AISettings['provider']; onAI({ ...ai, provider, model: defaultModel(provider) }) }}><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option></select></label>
+        <label className="field"><span>Provider</span><select value={ai.provider} onChange={(event) => { const provider = event.target.value as AISettings['provider']; onAI({ ...ai, provider, model: defaultModel(provider) }) }}><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option><option value="deepseek">DeepSeek</option></select></label>
         <label className="field"><span>Model</span><input value={ai.model} onChange={(event) => onAI({ ...ai, model: event.target.value })} /></label>
         <label className="field"><span>API Key</span><input type="password" autoComplete="off" value={ai.apiKey} onChange={(event) => onAI({ ...ai, apiKey: event.target.value })} placeholder="仅保存在当前会话" /></label>
         <div className="privacy-note"><ShieldCheck /><span><strong>Local-first</strong> 文章、译文和阅读设置不上传到项目方数据库。</span></div>

@@ -5,6 +5,7 @@ import { ReaderView } from '../components/reader/ReaderView'
 import { ContextPanel } from '../components/context/ContextPanel'
 import type { AISettings, DictionaryEntry, DocumentBlock, ReaderDocument, ReaderPreferences, SyntaxResult, TranslationRecord } from '../core/document/types'
 import { analyzeSyntax, loadAISettings, saveAISettings, translateParagraph } from '../core/ai/client'
+import { translationOutcomeMessage } from '../core/ai/translation-outcome'
 import { blockText, hashText } from '../core/document/hash'
 import { deleteDocument, loadDocuments, loadPreferences, loadSessionDocument, loadTranslations, saveDocument, savePreferences, saveTranslation } from '../core/storage/db'
 import { lookupWord, speak } from '../features/dictionary/lookup'
@@ -96,7 +97,7 @@ function App() {
     if (!ai.apiKey) { setSettingsOpen(true); setNotice('请先配置自己的 AI API Key'); return }
     const queue = readableBlocks.filter((block) => !translations.has(block.id))
     if (!queue.length) { setPreferences((current) => ({ ...current, translationVisible: true })); setNotice('当前文章已经翻译完成'); return }
-    let cursor = 0; let done = 0
+    let cursor = 0; let done = 0; let succeeded = 0; let failed = 0; let lastError = ''
     setTranslationProgress({ done, total: queue.length }); setPreferences((current) => ({ ...current, translationVisible: true }))
     const worker = async () => {
       while (cursor < queue.length) {
@@ -106,11 +107,17 @@ function App() {
           const translation = await translateParagraph(text, preferences.targetLanguage, preferences.translationMode, ai)
           const record: TranslationRecord = { documentId: document.id, blockId: block.id, originalHash: await hashText(text), translation, edited: false }
           await saveTranslation(record); setTranslations((current) => new Map(current).set(block.id, record))
-        } catch (caught) { setNotice(caught instanceof Error ? caught.message : '部分段落翻译失败') }
+          succeeded += 1
+        } catch (caught) {
+          failed += 1
+          lastError = caught instanceof Error ? caught.message : 'Provider 请求失败'
+        }
         done += 1; setTranslationProgress({ done, total: queue.length })
       }
     }
-    await Promise.all([worker(), worker()]); setTranslationProgress(null); setNotice('全文翻译完成')
+    await Promise.all([worker(), worker()])
+    setTranslationProgress(null)
+    setNotice(translationOutcomeMessage(succeeded, failed, queue.length, lastError))
   }
 
   const editTranslation = async (block: DocumentBlock, value: string) => {

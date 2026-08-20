@@ -79,7 +79,7 @@ export interface ReaderPreferences {
 }
 
 export interface AISettings {
-  provider: 'openai' | 'gemini' | 'anthropic' | 'openrouter'
+  provider: 'openai' | 'gemini' | 'anthropic' | 'openrouter' | 'deepseek'
   model: string
   apiKey: string
 }

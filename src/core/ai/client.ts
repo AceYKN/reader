@@ -17,9 +17,10 @@ const syntaxSchema = z.object({
 
 const defaults: Record<AISettings['provider'], string> = {
   openai: 'gpt-5-mini',
-  gemini: 'gemini-2.5-flash',
+  gemini: 'gemini-3.5-flash-lite',
   anthropic: 'claude-sonnet-4-5',
   openrouter: 'openai/gpt-5-mini',
+  deepseek: 'deepseek-chat',
 }
 
 export function defaultModel(provider: AISettings['provider']) { return defaults[provider] }
@@ -56,7 +57,8 @@ export function loadAISettings(): AISettings {
   try {
     const saved = JSON.parse(sessionStorage.getItem('margin-reader:ai') ?? '{}') as Partial<AISettings>
     const provider = saved.provider && saved.provider in defaults ? saved.provider : 'openai'
-    return { provider, model: saved.model || defaults[provider], apiKey: saved.apiKey || '' }
+    const retiredGeminiDefault = provider === 'gemini' && ['gemini-2.5-flash', 'gemini-2.5-flash-lite'].includes(saved.model ?? '')
+    return { provider, model: retiredGeminiDefault ? defaults.gemini : saved.model || defaults[provider], apiKey: saved.apiKey || '' }
   } catch { return { provider: 'openai', model: defaults.openai, apiKey: '' } }
 }
 

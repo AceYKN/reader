@@ -9,7 +9,7 @@
 - 英文 / 日文 / 混合文本本地识别与 `Intl.Segmenter` 句词切分
 - 桌面 Context Panel 与移动端 Bottom Sheet
 - 单词 / 词组释义、日文罗马音辅助与浏览器 TTS
-- OpenAI、Gemini、Anthropic、OpenRouter 的 BYOK 翻译与句法分析
+- OpenAI、Gemini、Anthropic、OpenRouter、DeepSeek 的 BYOK 翻译与句法分析
 - Faithful / Natural / Academic / Learning 四种翻译模式
 - 段落翻译队列（并发 2）、译文编辑与 IndexedDB 本地保存
 - PDF.js 文本提取、Mammoth DOCX 解析、Tesseract.js 英日文 OCR

@@ -1,8 +1,4 @@
-interface Env {
-  ASSETS: Fetcher
-}
-
-type Provider = 'openai' | 'gemini' | 'anthropic' | 'openrouter'
+type Provider = 'openai' | 'gemini' | 'anthropic' | 'openrouter' | 'deepseek'
 type Operation = 'translation' | 'syntax'
 
 const json = (body: unknown, status = 200, headers: HeadersInit = {}) => new Response(JSON.stringify(body), {
@@ -71,7 +67,7 @@ async function aiProxy(request: Request) {
   if (!key || key.length > 4096) return json({ message: '缺少 Provider API Key。' }, 401)
   let input: { provider?: Provider; model?: string; operation?: Operation; payload?: Record<string, unknown> }
   try { input = await request.json() } catch { return json({ message: '请求格式无效。' }, 400) }
-  if (!input.provider || !['openai', 'gemini', 'anthropic', 'openrouter'].includes(input.provider)) return json({ message: '不支持这个 AI Provider。' }, 400)
+  if (!input.provider || !['openai', 'gemini', 'anthropic', 'openrouter', 'deepseek'].includes(input.provider)) return json({ message: '不支持这个 AI Provider。' }, 400)
   if (!input.operation || !['translation', 'syntax'].includes(input.operation) || !input.payload) return json({ message: '不支持这个操作。' }, 400)
   if (!input.model || !/^[\w./:-]{1,100}$/.test(input.model)) return json({ message: '模型名称无效。' }, 400)
   const prompt = promptFor(input.operation, input.payload)
@@ -87,7 +83,11 @@ async function aiProxy(request: Request) {
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, responseMimeType: 'application/json' } }),
     })
   } else {
-    const endpoint = input.provider === 'openai' ? 'https://api.openai.com/v1/chat/completions' : 'https://openrouter.ai/api/v1/chat/completions'
+    const endpoint = input.provider === 'openai'
+      ? 'https://api.openai.com/v1/chat/completions'
+      : input.provider === 'deepseek'
+        ? 'https://api.deepseek.com/chat/completions'
+        : 'https://openrouter.ai/api/v1/chat/completions'
     upstream = await fetch(endpoint, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`, ...(input.provider === 'openrouter' ? { 'HTTP-Referer': new URL(request.url).origin, 'X-Title': 'Margin Reader' } : {}) },
       body: JSON.stringify({ model: input.model, temperature: 0.2, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: prompt }] }),
