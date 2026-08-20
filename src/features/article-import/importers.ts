@@ -1,10 +1,13 @@
 import { Readability } from '@mozilla/readability'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
+import markedKatex from 'marked-katex-extension'
 import type { ReaderDocument } from '../../core/document/types'
 import { htmlToDocument, plainTextToDocument } from '../../core/document/html-to-ast'
 
 export interface ImportProgress { stage: string; progress?: number }
+
+marked.use(markedKatex({ nonStandard: true, throwOnError: false, strict: 'warn', trust: false }))
 
 export async function importText(text: string, format: 'plain' | 'markdown' = 'plain', title?: string) {
   if (format === 'markdown') return htmlToDocument(await marked.parse(text, { async: true }), { title: title || 'Markdown 文档' })

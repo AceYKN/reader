@@ -6,6 +6,25 @@ import './styles/tokens.css'
 import './styles/global.css'
 import { registerSW } from 'virtual:pwa-register'
 
-registerSW({ immediate: true })
+const updateIntervalMs = 15 * 60 * 1000
+
+registerSW({
+  immediate: true,
+  onRegisteredSW(_serviceWorkerUrl, registration) {
+    if (!registration) return
+
+    const checkForUpdate = () => {
+      if (navigator.onLine && !registration.installing) {
+        void registration.update()
+      }
+    }
+
+    window.addEventListener('focus', checkForUpdate)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') checkForUpdate()
+    })
+    window.setInterval(checkForUpdate, updateIntervalMs)
+  },
+})
 
 createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)

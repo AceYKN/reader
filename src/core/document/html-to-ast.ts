@@ -4,6 +4,13 @@ import { detectLanguage } from '../language/detect'
 
 const id = () => crypto.randomUUID()
 
+function latexFromKatex(element: Element) {
+  const annotation = element.querySelector('annotation[encoding="application/x-tex"]')?.textContent?.trim()
+  if (annotation) return annotation
+  const math = element.querySelector('math')
+  return [...(math?.childNodes ?? [])].find((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim())?.textContent?.trim()
+}
+
 function segmentsFrom(node: Node): TextSegment[] {
   const output: TextSegment[] = []
   const walk = (current: Node, marks: TextSegment['marks'] = {}) => {
@@ -13,6 +20,15 @@ function segmentsFrom(node: Node): TextSegment[] {
     }
     if (!(current instanceof HTMLElement)) return
     const tag = current.tagName.toLowerCase()
+    if (current.classList.contains('katex')) {
+      const latex = latexFromKatex(current)
+      if (latex) output.push({ text: latex, marks: { ...marks, formula: 'latex' } })
+      return
+    }
+    if (tag === 'math') {
+      output.push({ text: current.outerHTML, marks: { ...marks, formula: 'mathml' } })
+      return
+    }
     const next = {
       ...marks,
       bold: marks.bold || tag === 'strong' || tag === 'b',
@@ -46,7 +62,10 @@ export function htmlToDocument(html: string, meta: ReaderDocument['meta'] = {}):
 
   const append = (element: Element) => {
     const tag = element.tagName.toLowerCase()
-    if (/^h[1-6]$/.test(tag)) {
+    if (element.classList.contains('katex-display')) {
+      const latex = latexFromKatex(element)
+      if (latex) blocks.push({ id: id(), type: 'formula', source: 'latex', content: latex })
+    } else if (/^h[1-6]$/.test(tag)) {
       const segments = segmentsFrom(element)
       if (segments.some((part) => part.text.trim())) blocks.push({ id: id(), type: 'heading', level: Number(tag[1]), segments })
     } else if (tag === 'p' || tag === 'figcaption') {

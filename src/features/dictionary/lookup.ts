@@ -10,10 +10,10 @@ export async function lookupWord(word: string): Promise<DictionaryEntry[]> {
   if (language === 'ja') {
     return [{ word: normalized, reading: normalized, romaji: toRomaji(normalized), definitions: ['本地 JMdict 词库将在后续数据包中提供；可先使用句法分析获取当前语境含义。'], source: '日语本地辅助' }]
   }
-  const key = `en:${normalized.toLowerCase()}`
+  const key = `en-zh:v3:${normalized.toLowerCase()}`
   const cached = await cacheDictionary(key)
   if (cached) return cached as DictionaryEntry[]
-  const response = await fetch(`/api/dictionary/free?word=${encodeURIComponent(normalized)}`)
+  const response = await fetch(`/api/dictionary/en-zh?word=${encodeURIComponent(normalized)}`)
   if (!response.ok) return []
   const entries = await response.json() as DictionaryEntry[]
   await cacheDictionary(key, entries)

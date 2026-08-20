@@ -2,7 +2,15 @@ export type LanguageCode = 'en' | 'ja' | 'mixed' | 'unknown'
 
 export interface TextSegment {
   text: string
-  marks?: { bold?: boolean; italic?: boolean; underline?: boolean; link?: string; code?: boolean }
+  marks?: {
+    bold?: boolean
+    italic?: boolean
+    underline?: boolean
+    link?: string
+    code?: boolean
+    formula?: 'latex' | 'mathml'
+    displayFormula?: boolean
+  }
 }
 
 export type DocumentBlock =
@@ -60,6 +68,8 @@ export interface DictionaryEntry {
   partOfSpeech?: string
   definitions: string[]
   source: string
+  chineseDefinitions?: string[]
+  chineseSource?: string
   reading?: string
   romaji?: string
 }

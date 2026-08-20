@@ -1,9 +1,9 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { AlignJustify, BookMarked, ChevronDown, Columns2, FilePlus2, Languages, Library, LoaderCircle, Menu, Moon, PanelRightClose, Settings2, Sun, X } from 'lucide-react'
 import { SettingsDrawer } from '../components/settings/SettingsDrawer'
 import { ReaderView } from '../components/reader/ReaderView'
 import { ContextPanel } from '../components/context/ContextPanel'
-import type { AISettings, DictionaryEntry, DocumentBlock, ReaderDocument, ReaderPreferences, SyntaxResult, TranslationRecord } from '../core/document/types'
+import type { AISettings, DictionaryEntry, ReaderDocument, ReaderPreferences, SyntaxResult, TranslationRecord } from '../core/document/types'
 import { analyzeSyntax, loadAISettings, saveAISettings, translateParagraph } from '../core/ai/client'
 import { translationOutcomeMessage } from '../core/ai/translation-outcome'
 import { blockText, hashText } from '../core/document/hash'
@@ -14,7 +14,7 @@ const ImportDialog = lazy(() => import('../components/import/ImportDialog').then
 
 const defaultPreferences: ReaderPreferences = {
   theme: 'system', fontFamily: 'serif', fontSize: 20, lineHeight: 1.8, contentWidth: 720, paragraphSpacing: 1.25,
-  translationVisible: true, layout: 'reading', targetLanguage: '简体中文', translationMode: 'learning', localPersistence: true,
+  translationVisible: true, layout: 'parallel', targetLanguage: '简体中文', translationMode: 'learning', localPersistence: true,
 }
 
 const sample = `Reading is often described as the act of receiving information, but careful reading is closer to building a temporary world. A sentence gives us materials; attention decides how they fit together.
@@ -39,11 +39,13 @@ function App() {
   const [query, setQuery] = useState('')
   const [entries, setEntries] = useState<DictionaryEntry[]>([])
   const [syntax, setSyntax] = useState<SyntaxResult | null>(null)
-  const [activeSyntax, setActiveSyntax] = useState<{ sentence: string; result: SyntaxResult } | null>(null)
+  const [activeSyntax, setActiveSyntax] = useState<{ blockId: string; sentence: string; result: SyntaxResult } | null>(null)
+  const [analyzingTarget, setAnalyzingTarget] = useState<{ blockId: string; sentence: string } | null>(null)
   const [panelLoading, setPanelLoading] = useState(false)
   const [panelError, setPanelError] = useState('')
   const [translationProgress, setTranslationProgress] = useState<{ done: number; total: number } | null>(null)
   const [notice, setNotice] = useState('')
+  const panelRequest = useRef<AbortController | null>(null)
 
   useEffect(() => { void loadDocuments().then(setDocuments); void loadPreferences().then((saved) => { if (saved) setPreferences({ ...defaultPreferences, ...saved }); setPreferencesReady(true) }) }, [])
   useEffect(() => { saveAISettings(ai) }, [ai])
@@ -58,43 +60,67 @@ function App() {
     void loadTranslations(document.id).then((records) => setTranslations(new Map(records.map((record) => [record.blockId, record]))))
   }, [document?.id])
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 2600); return () => clearTimeout(timer) }, [notice])
+  useEffect(() => () => panelRequest.current?.abort(), [])
 
   const readableBlocks = useMemo(() => document?.blocks.filter((block) => ['paragraph', 'heading', 'quote', 'list'].includes(block.type) && blockText(block).trim()) ?? [], [document])
 
   const acceptDocument = async (next: ReaderDocument) => {
-    setDocument(next); setActiveSyntax(null); setPanelOpen(false); setTranslations(new Map())
+    panelRequest.current?.abort(); panelRequest.current = null
+    setDocument(next); setActiveSyntax(null); setAnalyzingTarget(null); setPanelOpen(false); setTranslations(new Map())
     await saveDocument(next, preferences.localPersistence)
     setDocuments(await loadDocuments())
   }
 
-  const chooseDocument = (next: ReaderDocument) => { setDocument(next); sessionStorage.setItem('margin-reader:current', JSON.stringify(next)); setLibraryOpen(false) }
+  const chooseDocument = (next: ReaderDocument) => {
+    panelRequest.current?.abort(); panelRequest.current = null
+    setDocument(next); setActiveSyntax(null); setAnalyzingTarget(null); setPanelOpen(false)
+    sessionStorage.setItem('margin-reader:current', JSON.stringify(next)); setLibraryOpen(false)
+  }
 
   const lookup = async (text: string) => {
     setQuery(text); setEntries([]); setPanelMode('dictionary'); setPanelOpen(true); setPanelError(''); setPanelLoading(true)
     try { setEntries(await lookupWord(text)) } catch { setPanelError('词典暂时不可用，请稍后重试。') } finally { setPanelLoading(false) }
   }
 
-  const analyze = async (sentence: string) => {
+  const analyze = async (sentence: string, blockId: string) => {
+    panelRequest.current?.abort()
+    const controller = new AbortController()
+    panelRequest.current = controller
     setPanelMode('syntax'); setPanelOpen(true); setPanelLoading(true); setPanelError(''); setSyntax(null)
-    if (!ai.apiKey) { setPanelLoading(false); setPanelError('句法分析需要你的 AI API Key。请在阅读设置中配置。'); setSettingsOpen(true); return }
+    setAnalyzingTarget({ blockId, sentence })
+    if (!ai.apiKey && ai.provider !== 'deepseek') { setPanelLoading(false); setAnalyzingTarget(null); panelRequest.current = null; setPanelError('这个服务商需要你的 AI API Key。请在阅读设置中配置。'); setSettingsOpen(true); return }
     try {
-      const result = await analyzeSyntax(sentence, document?.meta.language ?? 'auto', preferences.targetLanguage, ai)
-      setSyntax(result); setActiveSyntax({ sentence, result })
-    } catch (caught) { setPanelError(caught instanceof Error ? caught.message : '分析失败，请重试。') } finally { setPanelLoading(false) }
+      const result = await analyzeSyntax(sentence, document?.meta.language ?? 'auto', preferences.targetLanguage, ai, controller.signal)
+      if (panelRequest.current !== controller || controller.signal.aborted) return
+      setSyntax(result); setActiveSyntax({ blockId, sentence, result })
+    } catch (caught) {
+      if (!(caught instanceof DOMException && caught.name === 'AbortError') && panelRequest.current === controller) setPanelError(caught instanceof Error ? caught.message : '分析失败，请重试。')
+    } finally {
+      if (panelRequest.current === controller) { setPanelLoading(false); setAnalyzingTarget(null); panelRequest.current = null }
+    }
   }
 
   const translateSelection = async (text: string) => {
-    if (!ai.apiKey) { setSettingsOpen(true); setNotice('请先配置自己的 AI API Key'); return }
+    if (!ai.apiKey && ai.provider !== 'deepseek') { setSettingsOpen(true); setNotice('请先配置自己的 AI API Key'); return }
+    panelRequest.current?.abort()
+    const controller = new AbortController()
+    panelRequest.current = controller
+    setAnalyzingTarget(null)
     setPanelMode('syntax'); setPanelOpen(true); setPanelLoading(true); setPanelError(''); setSyntax(null)
     try {
-      const translation = await translateParagraph(text, preferences.targetLanguage, preferences.translationMode, ai)
+      const translation = await translateParagraph(text, preferences.targetLanguage, preferences.translationMode, ai, undefined, controller.signal)
+      if (panelRequest.current !== controller || controller.signal.aborted) return
       setSyntax({ sentence: text, translation, spans: [], grammar: [], difficulty: { cefr: 'B1', confidence: 0 } })
-    } catch (caught) { setPanelError(caught instanceof Error ? caught.message : '翻译失败，请重试。') } finally { setPanelLoading(false) }
+    } catch (caught) {
+      if (!(caught instanceof DOMException && caught.name === 'AbortError') && panelRequest.current === controller) setPanelError(caught instanceof Error ? caught.message : '翻译失败，请重试。')
+    } finally {
+      if (panelRequest.current === controller) { setPanelLoading(false); panelRequest.current = null }
+    }
   }
 
   const translateDocument = async () => {
     if (!document || translationProgress) return
-    if (!ai.apiKey) { setSettingsOpen(true); setNotice('请先配置自己的 AI API Key'); return }
+    if (!ai.apiKey && ai.provider !== 'deepseek') { setSettingsOpen(true); setNotice('请先配置自己的 AI API Key'); return }
     const queue = readableBlocks.filter((block) => !translations.has(block.id))
     if (!queue.length) { setPreferences((current) => ({ ...current, translationVisible: true })); setNotice('当前文章已经翻译完成'); return }
     let cursor = 0; let done = 0; let succeeded = 0; let failed = 0; let lastError = ''
@@ -118,12 +144,6 @@ function App() {
     await Promise.all([worker(), worker()])
     setTranslationProgress(null)
     setNotice(translationOutcomeMessage(succeeded, failed, queue.length, lastError))
-  }
-
-  const editTranslation = async (block: DocumentBlock, value: string) => {
-    if (!document) return
-    const record: TranslationRecord = { documentId: document.id, blockId: block.id, originalHash: await hashText(blockText(block)), translation: value, edited: true }
-    setTranslations((current) => new Map(current).set(block.id, record)); await saveTranslation(record)
   }
 
   const updatePreferences = (next: ReaderPreferences) => setPreferences(next)
@@ -154,7 +174,7 @@ function App() {
       <div className="welcome-copy"><span className="kicker">READ · SELECT · UNDERSTAND</span><h1>让文章保持安静，<br /><em>让理解恰好出现。</em></h1><p>一个以文章本身为中心的交互式外文精读器。导入英文或日文，选择一个词、词组或句子，在需要时获得帮助。</p><div className="welcome-actions"><button className="primary large" onClick={() => setImportOpen(true)}><FilePlus2 />导入第一篇文章</button><button className="text-action" onClick={async () => { const { importText } = await import('../features/article-import/importers'); await acceptDocument(await importText(sample, 'plain', 'The Quiet Architecture of Attention')) }}>试读示例 <span>→</span></button></div><div className="privacy-line"><span>LOCAL-FIRST</span><i />无账户<i />无数据库<i />API Key 不落服务器</div></div>
       <div className="welcome-visual" aria-hidden="true"><div className="page page-back" /><div className="page page-front"><span>THE QUIET ARCHITECTURE</span><h2>Attention<br />builds a world.</h2><p>Reading is often described as the act of receiving information, but careful reading is closer to building a temporary world.</p><p className="marked-line">A sentence gives us materials;</p><small>SUBJECT</small><p>attention decides how they fit together.</p><i className="margin-note">understand,<br />then continue</i></div></div>
     </main> : <div className="workspace">
-      <ReaderView document={document} preferences={preferences} translations={translations} activeSyntax={activeSyntax} onLookup={(text) => void lookup(text)} onSpeak={(text) => speak(text, document.meta.language)} onAnalyze={(sentence) => void analyze(sentence)} onTranslateSentence={(text) => void translateSelection(text)} onEditTranslation={(block, value) => void editTranslation(block, value)} />
+      <ReaderView document={document} preferences={preferences} translations={translations} activeSyntax={activeSyntax} analyzingTarget={analyzingTarget} onLookup={(text) => void lookup(text)} onSpeak={(text) => speak(text, document.meta.language)} onAnalyze={(sentence, blockId) => void analyze(sentence, blockId)} onTranslateSentence={(text) => void translateSelection(text)} />
       <ContextPanel open={panelOpen} mode={panelMode} query={query} entries={entries} syntax={syntax} loading={panelLoading} error={panelError} onClose={() => setPanelOpen(false)} onSpeak={(text) => speak(text, document.meta.language)} />
       {panelOpen && <button className="panel-collapse" onClick={() => setPanelOpen(false)} aria-label="收起详情"><PanelRightClose /></button>}
     </div>}

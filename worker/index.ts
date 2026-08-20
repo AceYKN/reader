@@ -1,5 +1,8 @@
+import { promptFor, type AIOperation } from '../src/core/ai/prompts'
+
 type Provider = 'openai' | 'gemini' | 'anthropic' | 'openrouter' | 'deepseek'
-type Operation = 'translation' | 'syntax'
+type Operation = AIOperation
+type WorkerEnv = Env & { DEEPSEEK_API_KEY?: string }
 
 const json = (body: unknown, status = 200, headers: HeadersInit = {}) => new Response(JSON.stringify(body), {
   status,
@@ -46,39 +49,32 @@ async function fetchUrl(request: Request) {
   return json({ message: '无法访问网页。' }, 422)
 }
 
-function promptFor(operation: Operation, payload: Record<string, unknown>) {
-  if (operation === 'translation') {
-    const modes: Record<string, string> = {
-      faithful: 'Be maximally faithful and add nothing.', natural: 'Write natural, fluent target-language prose.', academic: 'Preserve terminology and formal academic register.', learning: 'Make the original logic and structure visible for a language learner.',
-    }
-    return `Translate the paragraph into ${String(payload.targetLanguage).slice(0, 40)}. ${modes[String(payload.mode)] ?? modes.faithful}\nPrevious context (may be empty): ${String(payload.context ?? '').slice(0, 600)}\nReturn only JSON: {"translation":"..."}\nParagraph:\n${String(payload.text).slice(0, 12000)}`
-  }
-  return `Analyze this ${String(payload.language).slice(0, 10)} sentence for a language learner. Return valid JSON only. Use UTF-16 character offsets into the exact input; never rewrite it. Roles: subject, predicate, object, complement, adverbial, modifier, clause, grammar. Include a translation into ${String(payload.targetLanguage).slice(0, 40)}, concise span explanations, grammar notes, and an estimated CEFR level with confidence from 0 to 1. Schema: {"sentence":"exact input","translation":"...","spans":[{"start":0,"end":1,"role":"subject","label":"Subject","explanation":"..."}],"grammar":[{"label":"...","explanation":"..."}],"difficulty":{"cefr":"B2","confidence":0.75}}\nInput:\n${String(payload.sentence).slice(0, 3000)}`
-}
-
 function extractJson(text: string) {
   const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
   return JSON.parse(cleaned)
 }
 
-async function aiProxy(request: Request) {
+async function aiProxy(request: Request, env: WorkerEnv) {
   if (Number(request.headers.get('content-length') ?? 0) > 40_000) return json({ message: '请求内容过大。' }, 413)
-  const key = request.headers.get('X-Provider-Key')?.trim()
-  if (!key || key.length > 4096) return json({ message: '缺少 Provider API Key。' }, 401)
   let input: { provider?: Provider; model?: string; operation?: Operation; payload?: Record<string, unknown> }
   try { input = await request.json() } catch { return json({ message: '请求格式无效。' }, 400) }
   if (!input.provider || !['openai', 'gemini', 'anthropic', 'openrouter', 'deepseek'].includes(input.provider)) return json({ message: '不支持这个 AI Provider。' }, 400)
   if (!input.operation || !['translation', 'syntax'].includes(input.operation) || !input.payload) return json({ message: '不支持这个操作。' }, 400)
   if (!input.model || !/^[\w./:-]{1,100}$/.test(input.model)) return json({ message: '模型名称无效。' }, 400)
+  const suppliedKey = request.headers.get('X-Provider-Key')?.trim()
+  const usesPublicDeepSeek = input.provider === 'deepseek' && !suppliedKey
+  const key = usesPublicDeepSeek ? env.DEEPSEEK_API_KEY?.trim() : suppliedKey
+  if (!key || key.length > 4096) return json({ message: usesPublicDeepSeek ? '本站 DeepSeek 公益服务暂时不可用。' : '缺少 Provider API Key。' }, usesPublicDeepSeek ? 503 : 401)
+  const model = usesPublicDeepSeek ? 'deepseek-v4-flash' : input.model
   const prompt = promptFor(input.operation, input.payload)
   let upstream: Response
   if (input.provider === 'anthropic') {
     upstream = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({ model: input.model, max_tokens: input.operation === 'syntax' ? 4096 : 2048, temperature: 0.2, messages: [{ role: 'user', content: prompt }] }),
+      body: JSON.stringify({ model, max_tokens: input.operation === 'syntax' ? 4096 : 2048, temperature: 0.1, messages: [{ role: 'user', content: prompt }] }),
     })
   } else if (input.provider === 'gemini') {
-    upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:generateContent`, {
+    upstream = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, responseMimeType: 'application/json' } }),
     })
@@ -90,7 +86,7 @@ async function aiProxy(request: Request) {
         : 'https://openrouter.ai/api/v1/chat/completions'
     upstream = await fetch(endpoint, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`, ...(input.provider === 'openrouter' ? { 'HTTP-Referer': new URL(request.url).origin, 'X-Title': 'Margin Reader' } : {}) },
-      body: JSON.stringify({ model: input.model, temperature: 0.2, response_format: { type: 'json_object' }, messages: [{ role: 'user', content: prompt }] }),
+      body: JSON.stringify({ model, temperature: 0.1, max_tokens: input.operation === 'syntax' ? 4096 : 2048, response_format: { type: 'json_object' }, ...(input.provider === 'deepseek' ? { thinking: { type: 'disabled' } } : {}), messages: [{ role: 'user', content: prompt }] }),
     })
   }
   const raw = await upstream.json().catch(() => null) as Record<string, any> | null
@@ -100,31 +96,73 @@ async function aiProxy(request: Request) {
   try { return json({ result: extractJson(content) }) } catch { return json({ message: 'Provider 返回了无效的结构化数据，请重试。' }, 502) }
 }
 
-async function dictionary(request: Request) {
+async function deepSeekChineseGloss(word: string, key?: string) {
+  if (!key) return []
+  const response = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model: 'deepseek-v4-flash',
+      thinking: { type: 'disabled' },
+      temperature: 0.1,
+      max_tokens: 180,
+      response_format: { type: 'json_object' },
+      messages: [{ role: 'user', content: `Give 1 to 4 concise Simplified Chinese dictionary glosses for the English word or phrase below. Include distinct common parts of speech when useful. No pinyin, examples, Markdown, or commentary. Return JSON only: {"definitions":["..."]}\nWORD: ${word}` }],
+    }),
+  })
+  if (!response.ok) return []
+  const raw = await response.json().catch(() => null) as Record<string, any> | null
+  const content = raw?.choices?.[0]?.message?.content
+  if (typeof content !== 'string') return []
+  try {
+    const definitions = (extractJson(content) as { definitions?: unknown }).definitions
+    return Array.isArray(definitions) ? definitions.filter((value): value is string => typeof value === 'string' && /[\u3400-\u9fff]/.test(value)).slice(0, 4) : []
+  } catch { return [] }
+}
+
+async function dictionary(request: Request, env: WorkerEnv) {
   const word = new URL(request.url).searchParams.get('word')?.trim() ?? ''
   if (!/^[A-Za-z][A-Za-z' -]{0,60}$/.test(word)) return json([], 400)
-  const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`)
-  if (!response.ok) return json([], response.status === 404 ? 404 : 502)
-  const raw = await response.json() as Array<any>
+  const chineseUrl = new URL('https://api.mymemory.translated.net/get')
+  chineseUrl.searchParams.set('q', word)
+  chineseUrl.searchParams.set('langpair', 'en|zh-CN')
+  const [response, chineseResponse] = await Promise.all([
+    fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`),
+    fetch(chineseUrl),
+  ])
+  const raw = response.ok ? await response.json() as Array<any> : []
+  const chineseRaw = chineseResponse.ok ? await chineseResponse.json().catch(() => null) as { responseData?: { translatedText?: string }; matches?: Array<{ translation?: string }> } | null : null
+  let chineseDefinitions = Array.from(new Set([
+    chineseRaw?.responseData?.translatedText,
+    ...(chineseRaw?.matches?.map((match) => match.translation) ?? []),
+  ].filter((value): value is string => typeof value === 'string' && /[\u3400-\u9fff]/.test(value)).map((value) => value.trim()))).slice(0, 4)
+  let chineseSource = 'MyMemory 中英翻译记忆库'
+  if (!chineseDefinitions.length) {
+    chineseDefinitions = await deepSeekChineseGloss(word, env.DEEPSEEK_API_KEY?.trim())
+    chineseSource = 'DeepSeek Flash 中文速释'
+  }
   const entries = raw.flatMap((entry) => entry.meanings.map((meaning: any) => ({
     word: entry.word,
     phonetic: entry.phonetic || entry.phonetics?.find((item: any) => item.text)?.text,
     audio: entry.phonetics?.find((item: any) => item.audio)?.audio || undefined,
     partOfSpeech: meaning.partOfSpeech,
     definitions: meaning.definitions.slice(0, 4).map((item: any) => item.definition),
-    source: 'Free Dictionary API',
+    source: 'DictionaryAPI.dev',
   }))).slice(0, 8)
-  return json(entries, 200, { 'Cache-Control': 'public, max-age=86400' })
+  if (entries.length) Object.assign(entries[0], { chineseDefinitions, chineseSource })
+  else if (chineseDefinitions.length) entries.push({ word, partOfSpeech: '中英速释', definitions: [], source: 'DictionaryAPI.dev', chineseDefinitions, chineseSource })
+  if (!entries.length) return json([], response.status === 404 ? 404 : 502)
+  return json(entries, 200, { 'Cache-Control': 'public, max-age=3600' })
 }
 
 export default {
-  async fetch(request: Request, env: Env) {
+  async fetch(request: Request, env: WorkerEnv) {
     const url = new URL(request.url)
     if (url.pathname === '/api/health') return json({ ok: true, service: 'margin-reader', storage: 'local-first' })
     if (url.pathname === '/api/fetch-url' && request.method === 'POST') return fetchUrl(request)
-    if (url.pathname === '/api/ai' && request.method === 'POST') return aiProxy(request)
-    if (url.pathname === '/api/dictionary/free' && request.method === 'GET') return dictionary(request)
+    if (url.pathname === '/api/ai' && request.method === 'POST') return aiProxy(request, env)
+    if ((url.pathname === '/api/dictionary/en-zh' || url.pathname === '/api/dictionary/free') && request.method === 'GET') return dictionary(request, env)
     if (url.pathname.startsWith('/api/')) return json({ message: '接口不存在。' }, 404)
     return env.ASSETS.fetch(request)
   },
-} satisfies ExportedHandler<Env>
+} satisfies ExportedHandler<WorkerEnv>

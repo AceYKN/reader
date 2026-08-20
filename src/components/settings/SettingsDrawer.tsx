@@ -26,10 +26,10 @@ export function SettingsDrawer({ open, onClose, preferences, onPreferences, ai, 
         <button className={preferences.theme === 'dark' ? 'active' : ''} onClick={() => onPreferences({ ...preferences, theme: 'dark' })}><Moon />深色</button>
         <button className={preferences.theme === 'system' ? 'active' : ''} onClick={() => onPreferences({ ...preferences, theme: 'system' })}>自动</button>
       </div></section>
-      <section><h3><KeyRound />AI · 自备 Key</h3><p className="section-help">Key 只保留在当前标签页的 sessionStorage，通过无状态边缘代理发送给你选择的服务商。</p>
-        <label className="field"><span>Provider</span><select value={ai.provider} onChange={(event) => { const provider = event.target.value as AISettings['provider']; onAI({ ...ai, provider, model: defaultModel(provider) }) }}><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option><option value="deepseek">DeepSeek</option></select></label>
-        <label className="field"><span>Model</span><input value={ai.model} onChange={(event) => onAI({ ...ai, model: event.target.value })} /></label>
-        <label className="field"><span>API Key</span><input type="password" autoComplete="off" value={ai.apiKey} onChange={(event) => onAI({ ...ai, apiKey: event.target.value })} placeholder="仅保存在当前会话" /></label>
+      <section><h3><KeyRound />AI 服务</h3><p className="section-help">DeepSeek Flash 由本站提供公益额度，无需填写 Key。其他服务商使用你自己的 Key，并且只保留在当前标签页。</p>
+        <label className="field"><span>Provider</span><select value={ai.provider} onChange={(event) => { const provider = event.target.value as AISettings['provider']; onAI({ ...ai, provider, model: defaultModel(provider), apiKey: provider === 'deepseek' ? '' : ai.apiKey }) }}><option value="deepseek">DeepSeek Flash（公益免费）</option><option value="openai">OpenAI</option><option value="gemini">Google Gemini</option><option value="anthropic">Anthropic</option><option value="openrouter">OpenRouter</option></select></label>
+        <label className="field"><span>Model</span><input value={ai.model} disabled={ai.provider === 'deepseek' && !ai.apiKey} onChange={(event) => onAI({ ...ai, model: event.target.value })} /></label>
+        <label className="field"><span>API Key</span><input type="password" autoComplete="off" value={ai.apiKey} onChange={(event) => onAI({ ...ai, apiKey: event.target.value })} placeholder={ai.provider === 'deepseek' ? '留空使用本站公益额度' : '仅保存在当前会话'} /></label>
         <div className="privacy-note"><ShieldCheck /><span><strong>Local-first</strong> 文章、译文和阅读设置不上传到项目方数据库。</span></div>
       </section>
       <section><h3>本地数据</h3><label className="switch-row"><span><strong>保存文档到本机</strong><small>关闭后只保留到当前标签页关闭</small></span><input type="checkbox" checked={preferences.localPersistence} onChange={(event) => onPreferences({ ...preferences, localPersistence: event.target.checked })} /></label></section>

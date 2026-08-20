@@ -3,7 +3,13 @@ import { FileText, Globe2, Image, Link2, LoaderCircle, Upload, X } from 'lucide-
 import type { ReaderDocument } from '../../core/document/types'
 import { importFile, importText, importUrl, type ImportProgress } from '../../features/article-import/importers'
 
-interface Props { open: boolean; onClose: () => void; onImported: (document: ReaderDocument) => void }
+interface Props { open: boolean; onClose: () => void; onImported: (document: ReaderDocument) => void | Promise<void> }
+
+export function normalizeImportUrl(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+}
 
 export function ImportDialog({ open, onClose, onImported }: Props) {
   const [tab, setTab] = useState<'paste' | 'url' | 'file'>('paste')
@@ -15,12 +21,12 @@ export function ImportDialog({ open, onClose, onImported }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   if (!open) return null
 
-  const finish = (document: ReaderDocument) => { setError(''); setProgress(null); onImported(document); onClose() }
+  const finish = async (document: ReaderDocument) => { setError(''); await onImported(document); setProgress(null); onClose() }
   const fail = (caught: unknown) => { setProgress(null); setError(caught instanceof Error ? caught.message : '导入失败，请换一种方式重试。') }
   const handleFile = async (file?: File) => {
     if (!file) return
     setError(''); setProgress({ stage: '正在打开文件…', progress: 1 })
-    try { finish(await importFile(file, setProgress)) } catch (caught) { fail(caught) }
+    try { await finish(await importFile(file, setProgress)) } catch (caught) { fail(caught) }
   }
 
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -35,15 +41,15 @@ export function ImportDialog({ open, onClose, onImported }: Props) {
         {tab === 'paste' && <>
           <textarea autoFocus value={text} onChange={(event) => setText(event.target.value)} placeholder="在这里粘贴英文或日文文章…" />
           <div className="import-row"><label className="check"><input type="checkbox" checked={markdown} onChange={(event) => setMarkdown(event.target.checked)} />按 Markdown 解析</label><span>{text.length.toLocaleString()} 字符</span></div>
-          <button className="primary" disabled={!text.trim() || !!progress} onClick={async () => { setProgress({ stage: '正在整理文章…' }); try { finish(await importText(text, markdown ? 'markdown' : 'plain')) } catch (caught) { fail(caught) } }}>进入阅读</button>
+          <button className="primary" disabled={!text.trim() || !!progress} onClick={async () => { setProgress({ stage: '正在整理文章…' }); try { await finish(await importText(text, markdown ? 'markdown' : 'plain')) } catch (caught) { fail(caught) } }}>进入阅读</button>
         </>}
         {tab === 'url' && <div className="url-import">
           <Globe2 className="large-icon" /><h3>导入公开网页</h3><p>适合新闻、博客和静态文章。登录墙与动态网站可能无法提取。</p>
-          <div className="url-field"><span>https://</span><input value={url.replace(/^https:\/\//, '')} onChange={(event) => setUrl(`https://${event.target.value.replace(/^https:\/\//, '')}`)} placeholder="example.com/article" /></div>
-          <button className="primary" disabled={!url.replace('https://', '').trim() || !!progress} onClick={async () => { setProgress({ stage: '正在获取并提取正文…' }); try { finish(await importUrl(url)) } catch (caught) { fail(caught) } }}>提取文章</button>
+          <div className="url-field"><input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/article" /></div>
+          <button className="primary" disabled={!url.trim() || !!progress} onClick={async () => { setProgress({ stage: '正在获取并提取正文…' }); try { await finish(await importUrl(normalizeImportUrl(url))) } catch (caught) { fail(caught) } }}>提取文章</button>
         </div>}
-        {tab === 'file' && <div className="drop-zone" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void handleFile(event.dataTransfer.files[0]) }} onClick={() => inputRef.current?.click()}>
-          <input ref={inputRef} type="file" hidden accept=".txt,.md,.markdown,.html,.htm,.pdf,.docx,image/png,image/jpeg,image/webp" onChange={(event) => void handleFile(event.target.files?.[0])} />
+        {tab === 'file' && <div className="drop-zone" role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') inputRef.current?.click() }} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void handleFile(event.dataTransfer.files[0]) }} onClick={(event) => { if (event.target === event.currentTarget || !(event.target as Element).closest('input')) inputRef.current?.click() }}>
+          <input ref={inputRef} type="file" hidden accept=".txt,.md,.markdown,.html,.htm,.pdf,.docx,image/png,image/jpeg,image/webp" onClick={(event) => event.stopPropagation()} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; void handleFile(file) }} />
           <div className="file-glyph"><Upload /></div><h3>拖放文件，或点击选择</h3><p>TXT · Markdown · HTML · PDF · DOCX · JPG · PNG · WebP</p>
           <div className="local-badges"><span><FileText />数字文档</span><span><Image />图片本地 OCR</span></div>
         </div>}
